@@ -12,6 +12,7 @@
 #include <ctime>
 #include <fstream>
 #include <sstream>
+#include <atomic>
 
 std::mutex rules_mutex;
 
@@ -34,6 +35,8 @@ std::mutex dos_mutex;
 
 // Лимит пакетов от одного IP в секунду
 const int DOS_PACKET_LIMIT = 100;
+
+std::atomic<bool> running(true);
 
 // Функция для записи правил в файл
 void saveRulesToFile() {
@@ -118,7 +121,7 @@ bool isDoSAttack(const char* source_ip) {
 
 // Сброс счетчика DoS каждые 1 секунду
 void resetDoSCounters() {
-    while (true) {
+    while (running) {
         std::this_thread::sleep_for(std::chrono::seconds(1));
         std::lock_guard<std::mutex> lock(dos_mutex);
         ip_packet_count.clear();
@@ -185,8 +188,24 @@ void packetHandler(u_char* user, const struct pcap_pkthdr* header, const u_char*
         return;
     }
 
-    // Разрешенный пакет
+    // ��азрешенный пакет
     std::cout << "[ALLOWED] Source IP: " << source_ip << ", Port: " << src_port << std::endl;
+}
+
+// Поток для управления правилами
+void consoleThread() {
+    while (running) {
+        std::cout << "Введите команду (add = добавить правило, exit = выход): ";
+        std::string command;
+        std::cin >> command;
+
+        if (command == "add") {
+            addRule();
+        } else if (command == "exit") {
+            running = false;
+            break;
+        }
+    }
 }
 
 int main() {
@@ -205,31 +224,18 @@ int main() {
 
     std::cout << "[INFO] Starting packet capture on device: " << device << std::endl;
 
-    // Поток для сброса счетчиков DoS
     std::thread dos_thread(resetDoSCounters);
-
-    // Поток для управления правилами
-    std::thread console_thread([]() {
-        while (true) {
-            std::cout << "Введите команду (add = добавить правило, exit = выход): ";
-            std::string command;
-            std::cin >> command;
-
-            if (command == "add") {
-                addRule();
-            } else if (command == "exit") {
-                exit(0);
-            }
-        }
-    });
+    std::thread console_thread(consoleThread);
 
     // Основной цикл захвата пакетов
     pcap_loop(handle, 0, packetHandler, nullptr);
 
     // Завершение потоков
+    running = false;
     dos_thread.join();
     console_thread.join();
     pcap_close(handle);
 
     return 0;
 }
+
